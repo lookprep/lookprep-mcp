@@ -1,8 +1,8 @@
 <p align="center">
   <a href="https://lookprep.com">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/lookprep-wordmark-reversed.svg">
-      <img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/lookprep-wordmark.svg" alt="LookPrep" width="220">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/banner-dark.webp">
+      <img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/banner-light.webp" alt="LookPrep: preview filler and lip flip on your own photo." width="900">
     </picture>
   </a>
 </p>
@@ -23,6 +23,7 @@
 </p>
 
 <p align="center">
+  <a href="#what-an-assistant-can-show">What it shows</a> ·
   <a href="#add-it-to-your-assistant">Add it</a> ·
   <a href="#try-asking">Try asking</a> ·
   <a href="#tools">Tools</a> ·
@@ -50,6 +51,48 @@ https://mcp.lookprep.com/mcp
 Streamable HTTP, no account, key or sign-in. The same server also answers at
 `https://lookprep.com/mcp`, for a client that cannot reach the first address. It is hosted by
 LookPrep, so most clients need nothing installed.
+
+## What an assistant can show
+
+Smaller copies of the images `show_demo_look` links to for one demo face: the photo before, then
+two named looks on the same face at their default demo settings (Russian lips at 0.5 mL, Natural
+lip enhancement at 0.55 mL; simulation settings, not recommended amounts). They are stored files
+made in advance on a generated demo face that LookPrep owns, the same ones the
+[public demo](https://lookprep.com/demo) shows. Nothing is created when a tool is called.
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="33%">
+      <img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/demo-before.webp" alt="Demo face before any simulation: a generated face with dark hair, facing the camera, on a grey background." width="240"><br>
+      <strong>Before</strong> (demo face)<br>
+      <sub>Simulation for planning and discussion. Not a prediction of a result and not medical advice.</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/demo-russian-lips.webp" alt="The same demo face with a simulation of Russian lips at the 0.5 mL demo setting: the centre of the upper lip looks taller, with two peaks along its top edge." width="240"><br>
+      <strong>Russian lips</strong>, 0.5 mL<br>
+      <sub>Simulation for planning and discussion. Not a prediction of a result and not medical advice.</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/demo-natural-lips.webp" alt="The same demo face with a simulation of Natural lip enhancement at the 0.55 mL demo setting: a modest change in fullness that keeps the outline recognisable." width="240"><br>
+      <strong>Natural lip enhancement</strong>, 0.55 mL<br>
+      <sub>Simulation for planning and discussion. Not a prediction of a result and not medical advice.</sub>
+    </td>
+  </tr>
+</table>
+
+`list_lip_styles` and `get_lip_style` explain the named looks; each has a page on lookprep.com
+with an editorial illustration like these:
+
+<p align="center">
+  <a href="https://lookprep.com/looks/russian-lips"><img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/look-russian-lips.webp" alt="Russian lips: editorial illustration card from the LookPrep looks guide" width="140"></a>
+  <a href="https://lookprep.com/looks/cupids-bow-lips"><img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/look-cupids-bow.webp" alt="Cupid's bow: editorial illustration card from the LookPrep looks guide" width="140"></a>
+  <a href="https://lookprep.com/looks/heart-shaped-lips"><img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/look-heart-shaped-lips.webp" alt="Heart-shaped lips: editorial illustration card from the LookPrep looks guide" width="140"></a>
+  <a href="https://lookprep.com/looks/natural-lip-enhancement"><img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/look-natural-lip-enhancement.webp" alt="Natural lip enhancement: editorial illustration card from the LookPrep looks guide" width="140"></a>
+  <a href="https://lookprep.com/looks/doll-lips"><img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/look-doll-lips.webp" alt="Doll lips: editorial illustration card from the LookPrep looks guide" width="140"></a>
+  <a href="https://lookprep.com/looks/butterfly-lips"><img src="https://raw.githubusercontent.com/lookprep/lookprep-mcp/main/assets/look-butterfly-lips.webp" alt="Butterfly lips: editorial illustration card from the LookPrep looks guide" width="140"></a>
+</p>
+
+The illustrations show what each look is called, not a treatment result.
 
 ## Add it to your assistant
 
