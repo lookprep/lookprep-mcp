@@ -1,0 +1,425 @@
+---
+# Release pipeline of lookprep/lookprep-mcp. It runs only in that public
+# repository (every job checks github.repository), so the copy in LookPrep's
+# source repository does nothing.
+#
+# A newly pushed stable tag vX.Y.Z on main:
+#   1. release-ref  checks the tag (new, stable, on main, equal to the workflow
+#                   commit) and that package.json carries the same version;
+#   2. build        (no id-token) builds and tests the tag, checks every version
+#                   field, packs and checks the tarball, and uploads it with
+#                   its integrity as an artifact;
+#   3. publish      (environment npm, id-token) downloads the tarball, checks it
+#                   against the build job's integrity record without running
+#                   any package code, publishes exactly that tarball with
+#                   trusted publishing (OIDC, no npm token) and provenance, and
+#                   verifies what npm serves;
+#   4. registry     requires npm to serve the version with the right mcpName,
+#                   the hosted server to answer tools/list and lookprep.com to
+#                   publish its Registry key, then validates and publishes
+#                   server.json to the official MCP Registry;
+#   5. github-release  creates the GitHub Release from the CHANGELOG section.
+#
+# A manual run (Actions > Release > Run workflow, with an existing tag) skips
+# build and publish and resumes steps 4 and 5, for example after the domain key was missing.
+# The Registry and GitHub Release steps end without change when the version
+# is already listed or released.
+#
+# Secrets: MCP_PRIVATE_KEY in the "mcp-registry" environment, the hex
+# Ed25519 key whose public half https://lookprep.com/.well-known/mcp-registry-auth
+# serves. It is referenced here by name only. npm needs no secret.
+name: Release
+
+"on":
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag whose npm version is already published, for example v1.0.0
+        required: true
+        type: string
+      auth:
+        description: How lookprep.com proves the com.lookprep namespace to the Registry
+        required: true
+        type: choice
+        default: http
+        options:
+          - http
+          - dns
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.20.0"
+  PACKAGE_NAME: lookprep-mcp
+  MCP_NAME: com.lookprep/lookprep
+  MCP_NAME_ENCODED: com.lookprep%2Flookprep
+  MCP_DOMAIN: lookprep.com
+
+jobs:
+  release-ref:
+    if: github.repository == 'lookprep/lookprep-mcp'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Resolve the release tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: node scripts/check-npm-release-ref.mjs >> "$GITHUB_OUTPUT"
+
+  # Builds, tests and packs the tag without any publishing credential: no
+  # id-token, no environment. Its only output is the tarball and its integrity.
+  build:
+    needs: release-ref
+    if: github.repository == 'lookprep/lookprep-mcp' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      filename: ${{ steps.pack.outputs.filename }}
+      integrity: ${{ steps.pack.outputs.integrity }}
+    env:
+      RELEASE_TAG: ${{ needs.release-ref.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+      RELEASE_SHA: ${{ needs.release-ref.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-ref.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Check the checkout and the runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          node -e 'if (process.version !== `v${process.env.NODE_VERSION}`) throw new Error("Unexpected Node runtime")'
+      - name: Refuse a version npm already has
+        run: |
+          node --input-type=module <<'JS'
+          const url = `https://registry.npmjs.org/${process.env.PACKAGE_NAME}/${process.env.RELEASE_VERSION}`;
+          const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+          if (response.status !== 404) {
+            throw new Error(response.ok
+              ? "npm already has this version. Stop and compare its integrity and provenance by hand; do not republish."
+              : `npm lookup failed: HTTP ${response.status}`);
+          }
+          JS
+      - name: Install, build, test and check the release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          bash scripts/check-local.sh
+          node scripts/check-release-metadata.mjs "$RELEASE_TAG"
+      - name: Pack and check the tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/release"
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/release/npm-pack.json"
+          (cd "$RUNNER_TEMP/release" && node "$GITHUB_WORKSPACE/scripts/check-npm-release-package.mjs" npm-pack.json "$RELEASE_TAG")
+          git diff --exit-code
+          echo "filename=$(jq -r '.[0].filename' "$RUNNER_TEMP/release/npm-pack.json")" >> "$GITHUB_OUTPUT"
+          echo "integrity=$(jq -r '.[0].integrity' "$RUNNER_TEMP/release/npm-pack.json")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-tarball
+          path: |
+            ${{ runner.temp }}/release/${{ steps.pack.outputs.filename }}
+            ${{ runner.temp }}/release/npm-pack.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Publishes the tarball the build job made. It checks out no package code
+  # and runs nothing from the package: it re-verifies the tarball against the
+  # build job's integrity record and publishes it with trusted publishing.
+  publish:
+    needs: [release-ref, build]
+    if: github.repository == 'lookprep/lookprep-mcp' && github.event_name == 'push'
+    environment: npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+      TARBALL: ${{ needs.build.outputs.filename }}
+      INTEGRITY: ${{ needs.build.outputs.integrity }}
+      # Fixed here, so the build job cannot change what publish accepts.
+      EXPECTED_FILES: LICENSE README.md dist/bridge.js dist/endpoint.js dist/index.js dist/instructions.js npm-shrinkwrap.json package.json
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/release
+      - name: Check the runtime, that no npm token is present, and the tarball
+        shell: bash
+        working-directory: ${{ runner.temp }}/release
+        run: |
+          set -euo pipefail
+          node -e 'if (process.version !== `v${process.env.NODE_VERSION}`) throw new Error("Unexpected Node runtime")'
+          npm --version | node -e 'let s=""; process.stdin.on("data", (c) => (s += c)).on("end", () => { const [a, b, c] = s.trim().split(".").map(Number); if (!(a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1))))) throw new Error("npm 11.5.1 or newer is required for trusted publishing"); })'
+          test -z "${NODE_AUTH_TOKEN:-}${NPM_TOKEN:-}"
+          : > "$RUNNER_TEMP/npm-release.npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npm-release.npmrc" >> "$GITHUB_ENV"
+          test "$TARBALL" = "${PACKAGE_NAME}-${RELEASE_VERSION}.tgz"
+          node --input-type=module <<'JS'
+          import { createHash } from "node:crypto";
+          import { execFileSync } from "node:child_process";
+          import { readFileSync } from "node:fs";
+          const { TARBALL, INTEGRITY, PACKAGE_NAME, RELEASE_VERSION, MCP_NAME } = process.env;
+          const actual = `sha512-${createHash("sha512").update(readFileSync(TARBALL)).digest("base64")}`;
+          if (actual !== INTEGRITY) throw new Error("The downloaded tarball does not match the build job's integrity");
+          const [pack] = JSON.parse(readFileSync("npm-pack.json", "utf8"));
+          if (pack.integrity !== INTEGRITY || pack.filename !== TARBALL) throw new Error("npm-pack.json does not match the build job's record");
+          const pkg = JSON.parse(execFileSync("tar", ["-xOf", TARBALL, "package/package.json"], { encoding: "utf8" }));
+          if (pkg.name !== PACKAGE_NAME || pkg.version !== RELEASE_VERSION || pkg.mcpName !== MCP_NAME) throw new Error("The tarball's package.json does not match the release");
+          const files = execFileSync("tar", ["-tzf", TARBALL], { encoding: "utf8" }).split("\n").filter(Boolean)
+            .map((entry) => entry.replace(/^package\//, "")).sort();
+          const expected = process.env.EXPECTED_FILES.split(" ").sort();
+          if (JSON.stringify(files) !== JSON.stringify(expected)) throw new Error(`The tarball holds ${files.join(", ")}, not exactly ${expected.join(", ")}`);
+          const lifecycle = ["preinstall", "install", "postinstall", "prepare"].filter((name) => pkg.scripts?.[name] !== undefined);
+          if (lifecycle.length) throw new Error(`The tarball's package.json has install scripts: ${lifecycle.join(", ")}`);
+          if (JSON.stringify(Object.keys(pkg.dependencies ?? {})) !== JSON.stringify(["@modelcontextprotocol/sdk"])) throw new Error("The tarball's dependencies are not exactly @modelcontextprotocol/sdk");
+          console.log(`${TARBALL} ${actual}`);
+          JS
+      - name: Publish exactly that tarball with trusted publishing
+        working-directory: ${{ runner.temp }}/release
+        run: npm publish "./$TARBALL" --ignore-scripts --provenance --access public
+      - name: Verify what npm serves
+        run: |
+          node --input-type=module <<'JS'
+          const { PACKAGE_NAME, RELEASE_VERSION, MCP_NAME, INTEGRITY } = process.env;
+          const url = `https://registry.npmjs.org/${PACKAGE_NAME}/${RELEASE_VERSION}`;
+          for (let attempt = 0; attempt < 30; attempt++) {
+            const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+            if (response.ok) {
+              const pkg = await response.json();
+              if (pkg.name !== PACKAGE_NAME || pkg.version !== RELEASE_VERSION || pkg.mcpName !== MCP_NAME ||
+                  pkg.dist?.integrity !== INTEGRITY || !pkg.dist?.attestations?.provenance) {
+                throw new Error("The published package's name, version, mcpName, integrity or provenance does not match");
+              }
+              console.log(`npm serves ${pkg.name}@${pkg.version} (${pkg.dist.integrity}) with provenance.`);
+              process.exit(0);
+            }
+            if (response.status !== 404) throw new Error(`npm lookup failed: HTTP ${response.status}`);
+            await new Promise((resolve) => setTimeout(resolve, 10000));
+          }
+          throw new Error("npm does not serve the version after publishing");
+          JS
+
+  registry:
+    needs: [release-ref, publish]
+    if: >-
+      always() && github.repository == 'lookprep/lookprep-mcp' &&
+      needs.release-ref.result == 'success' &&
+      (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.publish.result == 'skipped'))
+    environment: mcp-registry
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.release-ref.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+      RELEASE_SHA: ${{ needs.release-ref.outputs.sha }}
+      AUTH_METHOD: ${{ github.event_name == 'workflow_dispatch' && inputs.auth || 'http' }}
+      MCP_PUBLISHER_VERSION: v1.8.16
+      MCP_PUBLISHER_SHA256: 6e2f799550cf843c6fd3350498d56cc49be3dc0af1e6237eb0e6435c7a9d5c05
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-ref.outputs.sha }}
+          persist-credentials: false
+      - name: Check server.json against the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          case "$AUTH_METHOD" in http|dns) ;; *) echo "::error::auth must be http or dns." >&2; exit 1 ;; esac
+          jq -e --arg name "$MCP_NAME" --arg version "$RELEASE_VERSION" --arg package "$PACKAGE_NAME" '
+            .name == $name and .version == $version and
+            (.remotes | length == 1) and (.remotes[0].type == "streamable-http") and
+            ([.packages[] | select(.registryType == "npm" and .identifier == $package and .version == $version)] | length == 1) and
+            (.description | length <= 100)' server.json > /dev/null || {
+            echo "::error::server.json name, version, remote or package does not match ${RELEASE_TAG}." >&2
+            exit 1
+          }
+          echo "REMOTE_URL=$(jq -r '.remotes[0].url' server.json)" >> "$GITHUB_ENV"
+      - name: Require npm to serve the version with this mcpName
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 \
+            "https://registry.npmjs.org/${PACKAGE_NAME}/${RELEASE_VERSION}" > "$RUNNER_TEMP/npm.json" || {
+            echo "::error::npm does not serve ${PACKAGE_NAME}@${RELEASE_VERSION}; the Registry checks the npm package." >&2
+            exit 1
+          }
+          jq -e --arg name "$MCP_NAME" --arg version "$RELEASE_VERSION" \
+            '.version == $version and .mcpName == $name' "$RUNNER_TEMP/npm.json" > /dev/null || {
+            echo "::error::npm ${PACKAGE_NAME}@${RELEASE_VERSION} has an unexpected version or mcpName." >&2
+            exit 1
+          }
+      - name: Require the hosted server to answer tools/list
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Registry removes servers that do not work: never publish while the endpoint is down.
+          curl --fail --silent --show-error --max-time 30 \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -H 'MCP-Protocol-Version: 2026-07-28' \
+            -H 'Mcp-Method: tools/list' \
+            -A 'lookprep-mcp-release' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
+            "$REMOTE_URL" > "$RUNNER_TEMP/tools.json" || {
+            echo "::error::${REMOTE_URL} did not answer tools/list." >&2
+            exit 1
+          }
+          jq -e '.result.tools | length > 0' "$RUNNER_TEMP/tools.json" > /dev/null || {
+            echo "::error::${REMOTE_URL} answered tools/list without tools." >&2
+            exit 1
+          }
+          echo "${REMOTE_URL} lists $(jq '.result.tools | length' "$RUNNER_TEMP/tools.json") tools."
+      - name: Require lookprep.com to publish its Registry key
+        shell: bash
+        run: |
+          set -euo pipefail
+          pattern='^v=MCPv1; k=ed25519; p=[A-Za-z0-9+/]{43}=$'
+          if [ "$AUTH_METHOD" = "http" ]; then
+            record=$(curl --fail --silent --show-error --max-redirs 0 --max-time 30 \
+              -A 'mcp-registry/1.0' "https://${MCP_DOMAIN}/.well-known/mcp-registry-auth" | tr -d '\r' | grep '^v=MCPv1;' || true)
+          else
+            record=$(dig +short TXT "$MCP_DOMAIN" | tr -d '"' | grep '^v=MCPv1;' || true)
+          fi
+          if [[ ! "$record" =~ $pattern ]]; then
+            echo "::error::No single Ed25519 MCPv1 record found for ${MCP_DOMAIN} (${AUTH_METHOD})." >&2
+            exit 1
+          fi
+          echo "${MCP_DOMAIN} publishes one MCPv1 Ed25519 record (${AUTH_METHOD})."
+      - name: Stop if the Registry already lists the version
+        id: listed
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://registry.modelcontextprotocol.io/v0.1/servers/${MCP_NAME_ENCODED}/versions/${RELEASE_VERSION}"
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 "$url")
+          case "$status" in
+            200) echo "The Registry already lists ${RELEASE_VERSION}; versions are immutable."; echo "listed=true" >> "$GITHUB_OUTPUT" ;;
+            404) echo "listed=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Registry lookup failed: HTTP ${status}." >&2; exit 1 ;;
+          esac
+      - name: Download and verify the pinned mcp-publisher
+        if: steps.listed.outputs.listed == 'false'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl --fail --silent --show-error --location --max-time 120 \
+            --output mcp-publisher.tar.gz "${base}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum --check --strict
+          mkdir mcp-publisher-bin
+          tar -xzf mcp-publisher.tar.gz -C mcp-publisher-bin mcp-publisher
+          echo "MCP_PUBLISHER=$RUNNER_TEMP/mcp-publisher-bin/mcp-publisher" >> "$GITHUB_ENV"
+      - name: Validate server.json with the publisher
+        if: steps.listed.outputs.listed == 'false'
+        run: '"$MCP_PUBLISHER" validate server.json'
+      - name: Log in with the domain key and publish
+        if: steps.listed.outputs.listed == 'false'
+        shell: bash
+        env:
+          # mcp-publisher reads the key from this variable; it never reaches the command line.
+          MCP_PRIVATE_KEY: ${{ secrets.MCP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MCP_PRIVATE_KEY:-}" ]; then
+            echo "::error::The mcp-registry environment has no MCP_PRIVATE_KEY secret." >&2
+            exit 1
+          fi
+          "$MCP_PUBLISHER" login "$AUTH_METHOD" --domain "$MCP_DOMAIN"
+          "$MCP_PUBLISHER" publish server.json
+      - name: Verify the Registry lists the version
+        if: steps.listed.outputs.listed == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://registry.modelcontextprotocol.io/v0.1/servers/${MCP_NAME_ENCODED}/versions/${RELEASE_VERSION}"
+          for attempt in 1 2 3 4 5 6; do
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 "$url")
+            if [ "$status" = "200" ]; then echo "The Registry lists ${MCP_NAME} ${RELEASE_VERSION}."; exit 0; fi
+            echo "Attempt ${attempt}: HTTP ${status}."
+            sleep 10
+          done
+          echo "::error::The Registry does not list ${RELEASE_VERSION} after publishing." >&2
+          exit 1
+
+  github-release:
+    needs: [release-ref, registry]
+    if: always() && github.repository == 'lookprep/lookprep-mcp' && needs.registry.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.release-ref.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.release-ref.outputs.version }}
+      RELEASE_SHA: ${{ needs.release-ref.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-ref.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Create the GitHub Release from the changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "The GitHub Release ${RELEASE_TAG} already exists."
+            exit 0
+          fi
+          node scripts/changelog-section.mjs "$RELEASE_VERSION" > "$RUNNER_TEMP/notes.md"
+          {
+            echo
+            echo "npm: https://www.npmjs.com/package/${PACKAGE_NAME}/v/${RELEASE_VERSION}"
+            echo "MCP Registry: \`${MCP_NAME}\` ${RELEASE_VERSION}"
+          } >> "$RUNNER_TEMP/notes.md"
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/notes.md"

@@ -1,0 +1,59 @@
+{
+  "name": "lookprep-mcp",
+  "version": "1.0.0",
+  "description": "Stdio bridge to LookPrep's hosted, read-only MCP server: named lip filler looks, prices, stored demo simulations and a link to make your own simulation.",
+  "type": "module",
+  "bin": {
+    "lookprep-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "npm-shrinkwrap.json"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "live-check": "node scripts/live-check.mjs",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "lookprep",
+    "lip-filler",
+    "lip-flip",
+    "consultation",
+    "simulation"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.11",
+    "typescript": "7.0.2"
+  },
+  "mcpName": "com.lookprep/lookprep",
+  "homepage": "https://lookprep.com/agents",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lookprep/lookprep-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lookprep/lookprep-mcp/issues",
+    "email": "support@lookprep.com"
+  },
+  "author": {
+    "name": "LookPrep",
+    "email": "support@lookprep.com",
+    "url": "https://lookprep.com"
+  }
+}
