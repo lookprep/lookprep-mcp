@@ -1,0 +1,47 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.lookprep/lookprep",
+  "title": "LookPrep",
+  "description": "Read-only LookPrep catalogue: lip looks, prices, stored demo simulations and a link to the web flow.",
+  "websiteUrl": "https://lookprep.com",
+  "repository": {
+    "url": "https://github.com/lookprep/lookprep-mcp",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://mcp.lookprep.com/icon-512.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
+  "version": "1.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.lookprep.com/mcp"
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "lookprep-mcp",
+      "version": "1.0.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "LOOKPREP_MCP_URL",
+          "description": "Optional. The hosted endpoint the bridge forwards to: https://mcp.lookprep.com/mcp (default) or https://lookprep.com/mcp. Any other value is refused.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
