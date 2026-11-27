@@ -1,6 +1,6 @@
 {
   "name": "lookprep-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Stdio bridge to LookPrep's hosted, read-only MCP server: named lip filler looks, prices, stored demo simulations and a link to make your own simulation.",
   "type": "module",
   "bin": {
